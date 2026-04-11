@@ -111,3 +111,7 @@ venv.bak/
 .vscode/
 
 test.py
+
+# Home Assistant dev config
+config/*
+!config/configuration.yaml

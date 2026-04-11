@@ -1,0 +1,13 @@
+services:
+  homeassistant:
+    build:
+      context: .
+      dockerfile: Dockerfile.ha
+    container_name: ha-aosmith-dev
+    restart: unless-stopped
+    volumes:
+      - ./config:/config
+    environment:
+      - TZ=${TZ:-UTC}
+    ports:
+      - "${HA_PORT:-8123}:8123"

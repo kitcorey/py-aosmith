@@ -1,0 +1,11 @@
+# Minimal Home Assistant configuration for development/testing.
+# The aosmith integration uses config_flow, so add it through the UI:
+# Settings > Devices & Services > Add Integration > search "A. O. Smith"
+
+default_config:
+
+logger:
+  default: info
+  logs:
+    custom_components.aosmith: debug
+    py_aosmith: debug
