@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "py-aosmith"
-version = "1.0.17"
+version = "1.1.0"
 description = "A Python client library for A. O. Smith water heaters"
 authors = ["Brandon Rothweiler <brandonrothweiler@gmail.com>"]
 license = "MIT"
@@ -19,6 +19,14 @@ python = "^3.10"
 aiohttp = "^3.8.6"
 tenacity = ">=8.2.3,<10.0.0"
 
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-asyncio = ">=0.21"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["poetry-core"]

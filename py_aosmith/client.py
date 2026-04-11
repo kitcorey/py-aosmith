@@ -32,7 +32,7 @@ from .queries import (
     ENERGY_USE_DATA_GRAPHQL_QUERY
 )
 
-API_BASE_URL = "https://r1.wh8.co"
+API_BASE_URLS = ["https://r1.wh8.co", "https://r2.wh8.co"]
 APP_VERSION = "14.0.0"
 USER_AGENT = "okhttp/4.12.0"
 
@@ -212,7 +212,7 @@ def map_energy_use_data_dict_to_energy_use_data(energy_use_data_dict: dict[str, 
 class AOSmithAPIClient:
     token: str = None
 
-    def __init__(self, email: str, password: str, session: aiohttp.ClientSession = None):
+    def __init__(self, email: str, password: str, session: aiohttp.ClientSession = None, base_url: str = None):
         self.email = email
         self.password = password
 
@@ -220,6 +220,18 @@ class AOSmithAPIClient:
             self.session = aiohttp.ClientSession()
         else:
             self.session = session
+
+        if base_url is not None:
+            self._base_urls = [base_url]
+        else:
+            self._base_urls = list(API_BASE_URLS)
+        self._active_base_url = self._base_urls[0]
+
+    def _rotate_base_url(self) -> None:
+        current_index = self._base_urls.index(self._active_base_url)
+        next_index = (current_index + 1) % len(self._base_urls)
+        self._active_base_url = self._base_urls[next_index]
+        self.token = None
 
     @retry(
         retry=retry_if_exception_type(AOSmithUnknownException),
@@ -238,48 +250,64 @@ class AOSmithAPIClient:
         query_log = query.replace('\n', ' ')
         logger.debug(f"Sending query, variables: {variables}, login_required: {login_required}, retrying_after_login: {retrying_after_login}, query: {query_log}")
 
-        headers = {
-            "brand": "icomm",
-            "version": APP_VERSION,
-            "User-Agent": USER_AGENT
-        }
+        for attempt in range(len(self._base_urls)):
+            headers = {
+                "brand": "icomm",
+                "version": APP_VERSION,
+                "User-Agent": USER_AGENT
+            }
 
-        if login_required:
-            if self.token is None:
-                await self.__login()
+            if login_required:
                 if self.token is None:
-                    raise AOSmithUnknownException("Login failed")
-                logger.debug("Successfully logged in")
+                    await self.__login()
+                    if self.token is None:
+                        raise AOSmithUnknownException("Login failed")
+                    logger.debug("Successfully logged in")
 
-            headers["authorization"] = f"Bearer {self.token}"
+                headers["authorization"] = f"Bearer {self.token}"
 
-        try:
-            response = await self.session.request(
-                method="POST",
-                url=API_BASE_URL + "/graphql",
-                headers=headers,
-                json={
-                    "query": query,
-                    "variables": variables
-                },
-                timeout=TIMEOUT
-            )
-            logger.debug(f"Received response, status code: {response.status}")
-            logger.debug(f"Response body: {await response.text()}")
-        except asyncio.TimeoutError:
-            raise AOSmithUnknownException("Request timed out")
-        except Exception as err:
-            logger.exception("Request failed", exc_info=err)
-            raise AOSmithUnknownException("Request failed")
+            try:
+                response = await self.session.request(
+                    method="POST",
+                    url=self._active_base_url + "/graphql",
+                    headers=headers,
+                    json={
+                        "query": query,
+                        "variables": variables
+                    },
+                    timeout=TIMEOUT
+                )
+                logger.debug(f"Received response, status code: {response.status}")
+                logger.debug(f"Response body: {await response.text()}")
+            except (asyncio.TimeoutError, aiohttp.ClientError) as err:
+                logger.debug(f"Connection failed for {self._active_base_url}: {err}")
+                if attempt < len(self._base_urls) - 1:
+                    logger.debug(f"Rotating to next base URL")
+                    self._rotate_base_url()
+                    continue
+                raise AOSmithUnknownException("Request failed")
+            except Exception as err:
+                logger.exception("Request failed", exc_info=err)
+                raise AOSmithUnknownException("Request failed")
 
-        if response.status == 401:
-            if retrying_after_login:
-                raise AOSmithUnknownException("Received status code 401 after logging in")
-            logger.debug("Access token may be expired - trying to log in again")
-            await self.__login()
-            return await self.__send_graphql_query(query, variables, login_required, retrying_after_login=True)
-        elif response.status != 200:
-            raise AOSmithUnknownException(f"Received status code {response.status}")
+            if response.status == 503:
+                logger.debug(f"Received 503 from {self._active_base_url}")
+                if attempt < len(self._base_urls) - 1:
+                    logger.debug(f"Rotating to next base URL")
+                    self._rotate_base_url()
+                    continue
+                raise AOSmithUnknownException("Received status code 503")
+
+            if response.status == 401:
+                if retrying_after_login:
+                    raise AOSmithUnknownException("Received status code 401 after logging in")
+                logger.debug("Access token may be expired - trying to log in again")
+                await self.__login()
+                return await self.__send_graphql_query(query, variables, login_required, retrying_after_login=True)
+            elif response.status != 200:
+                raise AOSmithUnknownException(f"Received status code {response.status}")
+
+            break
 
         response_json = await response.json()
 
