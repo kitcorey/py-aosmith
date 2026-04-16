@@ -4,6 +4,8 @@ import pytest
 from unittest.mock import AsyncMock
 
 from py_aosmith.client import (
+    _REDACTED,
+    _redact_sensitive,
     build_passcode,
     device_is_compatible,
     map_mode_str_to_operation_mode_type,
@@ -102,6 +104,63 @@ class TestParseHotWaterStatus:
     def test_unknown_string_raises(self):
         with pytest.raises(AOSmithUnknownException, match="Unknown hot water status"):
             parse_hot_water_status("UNKNOWN")
+
+
+class TestRedactSensitive:
+    def test_redacts_passcode(self):
+        assert _redact_sensitive({"passcode": "secret"}) == {"passcode": _REDACTED}
+
+    def test_redacts_tokens(self):
+        result = _redact_sensitive({
+            "accessToken": "a",
+            "idToken": "b",
+            "refreshToken": "c",
+        })
+        assert result == {
+            "accessToken": _REDACTED,
+            "idToken": _REDACTED,
+            "refreshToken": _REDACTED,
+        }
+
+    def test_redacts_password(self):
+        assert _redact_sensitive({"password": "hunter2"}) == {"password": _REDACTED}
+
+    def test_preserves_non_sensitive(self):
+        data = {"forceUpdate": True, "junctionId": "abc123"}
+        assert _redact_sensitive(data) == data
+
+    def test_recursive_dict(self):
+        result = _redact_sensitive({
+            "data": {"login": {"user": {"tokens": {"accessToken": "x", "safe": 1}}}}
+        })
+        assert result == {
+            "data": {"login": {"user": {"tokens": {"accessToken": _REDACTED, "safe": 1}}}}
+        }
+
+    def test_list_of_dicts(self):
+        result = _redact_sensitive([{"passcode": "x"}, {"junctionId": "y"}])
+        assert result == [{"passcode": _REDACTED}, {"junctionId": "y"}]
+
+    def test_nested_list(self):
+        result = _redact_sensitive({"items": [{"accessToken": "a"}, {"other": "b"}]})
+        assert result == {"items": [{"accessToken": _REDACTED}, {"other": "b"}]}
+
+    def test_primitives_passthrough(self):
+        assert _redact_sensitive("hello") == "hello"
+        assert _redact_sensitive(42) == 42
+        assert _redact_sensitive(None) is None
+        assert _redact_sensitive(True) is True
+
+    def test_empty_dict(self):
+        assert _redact_sensitive({}) == {}
+
+    def test_empty_list(self):
+        assert _redact_sensitive([]) == []
+
+    def test_does_not_mutate_input(self):
+        original = {"passcode": "secret", "junctionId": "abc"}
+        _redact_sensitive(original)
+        assert original == {"passcode": "secret", "junctionId": "abc"}
 
 
 class TestIsEverythingOkay:

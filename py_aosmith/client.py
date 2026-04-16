@@ -42,6 +42,23 @@ TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 logger = logging.getLogger(__name__)
 
+_SENSITIVE_KEYS = frozenset({
+    "passcode",      # login request variable (contains encoded credentials)
+    "password",      # defensive
+    "accessToken",   # login response
+    "idToken",       # login response
+    "refreshToken",  # login response
+})
+_REDACTED = "***REDACTED***"
+
+def _redact_sensitive(data: Any) -> Any:
+    """Recursively redact values for sensitive keys in dicts/lists for safe logging."""
+    if isinstance(data, dict):
+        return {k: (_REDACTED if k in _SENSITIVE_KEYS else _redact_sensitive(v)) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_redact_sensitive(item) for item in data]
+    return data
+
 def build_passcode(email: str, password: str) -> str:
     data = {'email': email, 'password': password}
     json_string = json.dumps(data)
@@ -248,7 +265,7 @@ class AOSmithAPIClient:
         retrying_after_login: bool = False
     ) -> dict[str, Any]:
         query_log = query.replace('\n', ' ')
-        logger.debug(f"Sending query, variables: {variables}, login_required: {login_required}, retrying_after_login: {retrying_after_login}, query: {query_log}")
+        logger.debug(f"Sending query, variables: {_redact_sensitive(variables)}, login_required: {login_required}, retrying_after_login: {retrying_after_login}, query: {query_log}")
 
         for attempt in range(len(self._base_urls)):
             headers = {
@@ -278,7 +295,11 @@ class AOSmithAPIClient:
                     timeout=TIMEOUT
                 )
                 logger.debug(f"Received response, status code: {response.status}")
-                logger.debug(f"Response body: {await response.text()}")
+                response_text = await response.text()
+                try:
+                    logger.debug(f"Response body: {_redact_sensitive(json.loads(response_text))}")
+                except (ValueError, TypeError):
+                    logger.debug(f"Response body (non-JSON, {len(response_text)} chars)")
             except (asyncio.TimeoutError, aiohttp.ClientError) as err:
                 logger.debug(f"Connection failed for {self._active_base_url}: {err}")
                 if attempt < len(self._base_urls) - 1:
