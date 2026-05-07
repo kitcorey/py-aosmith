@@ -110,6 +110,9 @@ venv.bak/
 # VS Code
 .vscode/
 
+# Claude Code
+.claude/
+
 test.py
 
 # Home Assistant dev config
