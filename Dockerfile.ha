@@ -1,12 +1,12 @@
 FROM homeassistant/home-assistant:${HA_VERSION:-stable}
 
-# Install forked py-aosmith with endpoint failover
+# Install forked py-aosmith with endpoint failover and stale session recovery
 COPY py_aosmith/ /tmp/py-aosmith/py_aosmith/
 COPY pyproject.toml README.md /tmp/py-aosmith/
 RUN pip3 install --no-cache-dir --no-deps /tmp/py-aosmith && rm -rf /tmp/py-aosmith
 
 # Patch the built-in aosmith integration manifest to not enforce the PyPI version.
-# Without this, HA would see py-aosmith 1.1.0 != the pinned ==1.0.15 and downgrade it.
+# Without this, HA would see py-aosmith 1.1.2 != the pinned ==1.0.15 and downgrade it.
 RUN python3 -c "\
 import json, importlib.util; \
 spec = importlib.util.find_spec('homeassistant'); \
