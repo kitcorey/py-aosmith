@@ -311,13 +311,23 @@ class AOSmithAPIClient:
                 logger.exception("Request failed", exc_info=err)
                 raise AOSmithUnknownException("Request failed")
 
-            if response.status == 503:
-                logger.debug(f"Received 503 from {self._active_base_url}")
+            if response.status in (502, 503, 504):
+                logger.debug(f"Received {response.status} from {self._active_base_url}")
                 if attempt < len(self._base_urls) - 1:
                     logger.debug(f"Rotating to next base URL")
                     self._rotate_base_url()
                     continue
-                raise AOSmithUnknownException("Received status code 503")
+                raise AOSmithUnknownException(f"Received status code {response.status}")
+
+            if (
+                response.status == 400
+                and login_required
+                and self.token is not None
+                and not retrying_after_login
+            ):
+                logger.debug("Received 400 - access token may be expired - trying to log in again")
+                await self.__login()
+                return await self.__send_graphql_query(query, variables, login_required, retrying_after_login=True)
 
             if response.status == 401:
                 if retrying_after_login:
@@ -325,6 +335,8 @@ class AOSmithAPIClient:
                 logger.debug("Access token may be expired - trying to log in again")
                 await self.__login()
                 return await self.__send_graphql_query(query, variables, login_required, retrying_after_login=True)
+            elif response.status == 400 and retrying_after_login:
+                raise AOSmithUnknownException("Received status code 400 after logging in")
             elif response.status != 200:
                 raise AOSmithUnknownException(f"Received status code {response.status}")
 
