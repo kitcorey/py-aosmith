@@ -15,3 +15,7 @@ manifest = Path(spec.submodule_search_locations[0]) / 'components' / 'aosmith' /
 m = json.loads(manifest.read_text()); \
 m['requirements'] = []; \
 manifest.write_text(json.dumps(m, indent=2))"
+
+# Increase A.O. Smith polling interval from 30s to 300s to reduce API errors
+RUN sed -i 's/REGULAR_INTERVAL = timedelta(seconds=30)/REGULAR_INTERVAL = timedelta(seconds=300)/' \
+    /usr/src/homeassistant/homeassistant/components/aosmith/const.py
