@@ -51,10 +51,19 @@ _SENSITIVE_KEYS = frozenset({
 })
 _REDACTED = "***REDACTED***"
 
-# Patterns that indicate an unhandled server-side exception leaking through a
-# GraphQL `errors[]` payload (typically a JavaScript stack trace from the iCOMM
-# Node backend, returned with HTTP 200). When detected, rotate to the alternate
-# base URL — sometimes one region is wedged while the other is healthy.
+# GraphQL extensions.code values that explicitly mark the response as a
+# transient server-side failure. Strictly more reliable than message matching —
+# this is the structured signal the server itself emitted.
+_TRANSIENT_SERVER_ERROR_CODES = frozenset({
+    "INTERNAL_SERVER_ERROR",
+    "INTERNAL_ERROR",
+    "SERVICE_UNAVAILABLE",
+})
+
+# Message-substring fallback for unhandled server-side exceptions leaking
+# through a GraphQL `errors[]` payload (typically a JavaScript stack trace from
+# the iCOMM Node backend, returned with HTTP 200). Used when extensions.code is
+# absent or unrecognised.
 _TRANSIENT_SERVER_ERROR_PATTERNS = (
     "cannot read properties of undefined",
     "cannot read property",       # older V8 wording
@@ -76,7 +85,17 @@ def _redact_sensitive(data: Any) -> Any:
 
 
 def _is_transient_server_error(error: dict[str, Any]) -> bool:
-    """Heuristic: does this GraphQL error look like an unhandled backend exception?"""
+    """Does this GraphQL error look like a transient server-side failure?
+
+    Prefer the structured `extensions.code` signal; fall back to message-pattern
+    matching for older payloads or backends that omit the code.
+    """
+    extensions = error.get("extensions")
+    if isinstance(extensions, dict):
+        code = extensions.get("code")
+        if isinstance(code, str) and code in _TRANSIENT_SERVER_ERROR_CODES:
+            return True
+
     msg = error.get("message")
     if not isinstance(msg, str) or not msg:
         return False
@@ -325,7 +344,7 @@ class AOSmithAPIClient:
                 except (ValueError, TypeError):
                     logger.debug(f"Response body (non-JSON, {len(response_text)} chars)")
             except (asyncio.TimeoutError, aiohttp.ClientError) as err:
-                logger.debug(f"Connection failed for {self._active_base_url}: {err}")
+                logger.debug(f"Connection failed for {self._active_base_url}: {type(err).__name__}: {err}")
                 if attempt < len(self._base_urls) - 1:
                     logger.debug(f"Rotating to next base URL")
                     self._rotate_base_url()

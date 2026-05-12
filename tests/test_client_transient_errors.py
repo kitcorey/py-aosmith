@@ -21,6 +21,60 @@ LOGIN_RESPONSE = {
 }
 
 
+class TestIsTransientServerErrorByCode:
+    def test_internal_server_error_code(self):
+        """Production payload from 2026-05-12: server emits this code on the JS leak."""
+        assert _is_transient_server_error({
+            "message": "anything",
+            "extensions": {"code": "INTERNAL_SERVER_ERROR"},
+        }) is True
+
+    def test_internal_error_code(self):
+        assert _is_transient_server_error({
+            "message": "boom",
+            "extensions": {"code": "INTERNAL_ERROR"},
+        }) is True
+
+    def test_service_unavailable_code(self):
+        assert _is_transient_server_error({
+            "message": "x",
+            "extensions": {"code": "SERVICE_UNAVAILABLE"},
+        }) is True
+
+    def test_code_takes_precedence_over_benign_message(self):
+        """If the server says INTERNAL_SERVER_ERROR, we trust it even if the message looks benign."""
+        assert _is_transient_server_error({
+            "message": "Device not found",
+            "extensions": {"code": "INTERNAL_SERVER_ERROR"},
+        }) is True
+
+    def test_unknown_code_falls_back_to_message_match(self):
+        assert _is_transient_server_error({
+            "message": "Cannot read properties of undefined (reading 'id')",
+            "extensions": {"code": "SOMETHING_ELSE"},
+        }) is True
+
+    def test_invalid_credentials_code_is_not_transient(self):
+        """INVALID_CREDENTIALS should not be classified as transient — message doesn't match either."""
+        assert _is_transient_server_error({
+            "message": "Invalid email address or password",
+            "extensions": {"code": "INVALID_CREDENTIALS"},
+        }) is False
+
+    def test_extensions_not_dict(self):
+        """Defensive: extensions can be missing or non-dict on older payloads."""
+        assert _is_transient_server_error({
+            "message": "Cannot read properties of undefined",
+            "extensions": "not a dict",
+        }) is True  # falls back to message match
+
+    def test_extensions_code_not_string(self):
+        assert _is_transient_server_error({
+            "message": "Device not found",
+            "extensions": {"code": 500},
+        }) is False  # falls back to message match, doesn't match → False
+
+
 class TestIsTransientServerError:
     def test_cannot_read_properties_of_undefined(self):
         assert _is_transient_server_error(
@@ -98,6 +152,26 @@ class TestRotateOnTransientServerError:
         assert client._active_base_url == "https://r2.wh8.co"
         second_call = mock_session.request.call_args_list[1]
         assert "r2.wh8.co" in second_call.kwargs["url"]
+
+    async def test_failover_on_internal_server_error_code(self, client, mock_session):
+        """Production payload from 2026-05-12: full GraphQL error envelope with extensions.code."""
+        mock_session.request = AsyncMock(side_effect=[
+            make_response(200, {
+                "errors": [{
+                    "message": "Cannot read properties of undefined (reading 'id')",
+                    "locations": [{"line": 1, "column": 34}],
+                    "path": ["login"],
+                    "extensions": {"code": "INTERNAL_SERVER_ERROR"},
+                }],
+                "data": {"login": None},
+            }),
+            make_response(200, STATUS_OK_RESPONSE),
+        ])
+
+        result = await client.is_everything_okay()
+
+        assert result is True
+        assert client._active_base_url == "https://r2.wh8.co"
 
     async def test_failover_on_internal_server_error(self, client, mock_session):
         mock_session.request = AsyncMock(side_effect=[
