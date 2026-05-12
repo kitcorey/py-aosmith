@@ -51,6 +51,21 @@ _SENSITIVE_KEYS = frozenset({
 })
 _REDACTED = "***REDACTED***"
 
+# Patterns that indicate an unhandled server-side exception leaking through a
+# GraphQL `errors[]` payload (typically a JavaScript stack trace from the iCOMM
+# Node backend, returned with HTTP 200). When detected, rotate to the alternate
+# base URL — sometimes one region is wedged while the other is healthy.
+_TRANSIENT_SERVER_ERROR_PATTERNS = (
+    "cannot read properties of undefined",
+    "cannot read property",       # older V8 wording
+    "is not a function",
+    "is not defined",
+    "internal server error",
+    "typeerror",
+    "referenceerror",
+)
+
+
 def _redact_sensitive(data: Any) -> Any:
     """Recursively redact values for sensitive keys in dicts/lists for safe logging."""
     if isinstance(data, dict):
@@ -58,6 +73,15 @@ def _redact_sensitive(data: Any) -> Any:
     if isinstance(data, list):
         return [_redact_sensitive(item) for item in data]
     return data
+
+
+def _is_transient_server_error(error: dict[str, Any]) -> bool:
+    """Heuristic: does this GraphQL error look like an unhandled backend exception?"""
+    msg = error.get("message")
+    if not isinstance(msg, str) or not msg:
+        return False
+    msg_lower = msg.lower()
+    return any(pattern in msg_lower for pattern in _TRANSIENT_SERVER_ERROR_PATTERNS)
 
 def build_passcode(email: str, password: str) -> str:
     data = {'email': email, 'password': password}
@@ -340,9 +364,28 @@ class AOSmithAPIClient:
             elif response.status != 200:
                 raise AOSmithUnknownException(f"Received status code {response.status}")
 
-            break
+            # 200 OK — inspect the body for transient server-side errors before
+            # accepting the response. If found, rotate base URL via `continue`
+            # instead of going through tenacity's full wait cycle.
+            try:
+                response_json = json.loads(response_text)
+            except (ValueError, TypeError):
+                if attempt < len(self._base_urls) - 1:
+                    logger.debug(f"Non-JSON 200 body from {self._active_base_url}, rotating")
+                    self._rotate_base_url()
+                    continue
+                raise AOSmithUnknownException("Invalid JSON in response")
 
-        response_json = await response.json()
+            graphql_errors = response_json.get("errors") if isinstance(response_json, dict) else None
+            if graphql_errors and any(_is_transient_server_error(e) for e in graphql_errors):
+                messages = ", ".join(e.get("message", "") for e in graphql_errors)
+                if attempt < len(self._base_urls) - 1:
+                    logger.debug(f"Transient server error from {self._active_base_url}: {messages}; rotating")
+                    self._rotate_base_url()
+                    continue
+                raise AOSmithUnknownException("Transient server error: " + messages)
+
+            break
 
         if "errors" in response_json:
             errors = response_json.get("errors")

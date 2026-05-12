@@ -1,6 +1,7 @@
 FROM homeassistant/home-assistant:${HA_VERSION:-stable}
 
-# Install forked py-aosmith with endpoint failover and stale session recovery
+# Install forked py-aosmith with endpoint failover, stale-session recovery, and
+# rotation on transient server-side GraphQL errors (JS stack-trace leaks).
 COPY py_aosmith/ /tmp/py-aosmith/py_aosmith/
 COPY pyproject.toml README.md /tmp/py-aosmith/
 RUN pip3 install --no-cache-dir --no-deps /tmp/py-aosmith && rm -rf /tmp/py-aosmith
